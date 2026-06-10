@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Raindrop Privacy Sync",
+  "description": "Privacy-first Chrome bookmark gateway for one-way Raindrop backup.",
+  "version": "0.1.0",
+  "action": {
+    "default_popup": "src/popup/popup.html"
+  },
+  "options_page": "src/options/options.html",
+  "background": {
+    "service_worker": "src/background/service-worker.js",
+    "type": "module"
+  },
+  "permissions": [
+    "alarms",
+    "bookmarks",
+    "identity",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://api.raindrop.io/*",
+    "https://raindrop.io/*"
+  ]
+}

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="../shared/ui.css">
+    <title>Raindrop Privacy Sync</title>
+  </head>
+  <body class="popup">
+    <main class="popup-shell">
+      <section class="popup-hero">
+        <div class="topbar" style="margin:0;">
+          <div class="brand">
+            <h1>Raindrop Sync</h1>
+            <p id="modeText">Office Mode</p>
+          </div>
+          <span class="status-pill"><span id="statusDot" class="dot"></span><span id="statusText">读取中</span></span>
+        </div>
+        <p class="muted" id="lastSync">最近同步：未同步</p>
+      </section>
+
+      <section class="section">
+        <div class="summary">
+          <div class="metric"><strong id="created">0</strong><span>新增</span></div>
+          <div class="metric"><strong id="updated">0</strong><span>更新</span></div>
+          <div class="metric"><strong id="pulled">0</strong><span>拉取</span></div>
+          <div class="metric"><strong id="skipped">0</strong><span>跳过</span></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-header">
+          <div>
+            <h2>启用规则</h2>
+            <p>仅显示授权同步范围。</p>
+          </div>
+        </div>
+        <div id="rules" class="popup-rules"></div>
+      </section>
+
+      <div class="popup-actions">
+        <button id="syncNow" class="primary">同步</button>
+        <button id="pauseToggle">暂停</button>
+        <button id="openOptions">设置</button>
+      </div>
+    </main>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

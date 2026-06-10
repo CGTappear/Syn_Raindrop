@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="../shared/ui.css">
+    <title>Raindrop Privacy Sync 设置</title>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <h1>Raindrop Privacy Sync</h1>
+          <p>把 Chrome 工作书签安全备份到 Raindrop，只同步你允许暴露的范围。</p>
+        </div>
+        <div class="toolbar">
+          <button id="loadCollections">读取 Collections</button>
+          <button id="syncNow" class="primary">立即同步</button>
+        </div>
+      </header>
+
+      <section class="section">
+        <div class="status-panel">
+          <div class="sync-state">
+            <div>
+              <span id="connectionBadge" class="badge warn">未连接</span>
+            </div>
+            <div>
+              <strong id="statusHeadline">等待配置</strong>
+              <p id="statusLine" class="muted">配置 Raindrop 连接并创建同步规则。</p>
+            </div>
+          </div>
+          <div class="summary">
+            <div class="metric"><strong id="created">0</strong><span>新增</span></div>
+            <div class="metric"><strong id="updated">0</strong><span>更新</span></div>
+            <div class="metric"><strong id="archived">0</strong><span>归档</span></div>
+            <div class="metric"><strong id="pulled">0</strong><span>拉取</span></div>
+            <div class="metric"><strong id="skipped">0</strong><span>跳过</span></div>
+            <div class="metric"><strong id="failed">0</strong><span>失败</span></div>
+          </div>
+        </div>
+      </section>
+
+      <div class="dashboard-grid">
+        <div>
+          <section class="section">
+            <div class="section-header">
+              <div>
+                <h2>Raindrop 连接</h2>
+                <p>OAuth 授权后才能读取已授权 collection 并执行同步。</p>
+              </div>
+              <span id="tokenBadge" class="status-pill"><span class="dot warn"></span><span>未授权</span></span>
+            </div>
+
+            <div class="form-grid">
+              <label>
+                OAuth Client ID
+                <input id="clientId" autocomplete="off" placeholder="Raindrop app client_id">
+              </label>
+              <label>
+                OAuth Client Secret
+                <input id="clientSecret" type="password" autocomplete="off" placeholder="Raindrop app client_secret">
+              </label>
+              <label class="span-2">
+                Redirect URI
+                <input id="redirectUri" readonly>
+              </label>
+              <label>
+                Redirect Path
+                <input id="redirectPath" placeholder="raindrop">
+              </label>
+              <div class="toolbar" style="align-self: end;">
+                <button id="connectRaindrop" class="primary">连接 Raindrop</button>
+                <button id="disconnectRaindrop" class="danger">断开</button>
+              </div>
+              <div class="span-2 hint">Raindrop 开发者后台的 Redirect URL 必须和上面的 Redirect URI 完全一致。公开发布时建议使用后端 token broker。</div>
+              <label class="span-2">
+                Access Token（开发备用）
+                <input id="token" type="password" autocomplete="off" placeholder="Bearer token">
+              </label>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-header">
+              <div>
+                <h2>Raindrop Collection 去重</h2>
+                <p>独立扫描单个 collection，按 URL 查重并归档多余副本；不会触发规则同步。</p>
+              </div>
+            </div>
+
+            <div class="bulk-panel">
+              <div class="form-grid">
+                <label class="span-2">目标 Collection
+                  <select id="dedupeCollection"></select>
+                </label>
+                <div class="toolbar span-2">
+                  <button id="dedupeRaindropCollection" class="danger">查重并归档重复项</button>
+                </div>
+              </div>
+              <p id="dedupeHint" class="hint">先读取 Collections，再选择一个 Raindrop collection 执行独立去重。</p>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-header">
+              <div>
+                <h2>同步规则</h2>
+                <p>批量生成规则后，用紧凑列表管理；只在需要时编辑单条详情。</p>
+              </div>
+              <div class="toolbar">
+                <button id="addRule">新增规则</button>
+                <button id="saveRules" class="primary">保存规则</button>
+              </div>
+            </div>
+
+            <div class="bulk-panel">
+              <div class="form-grid">
+                <label>Chrome 根文件夹
+                  <select id="bulkChromeRoot"></select>
+                </label>
+                <label>Raindrop 根 Collection
+                  <select id="bulkRaindropRoot"></select>
+                </label>
+                <label>批量方式
+                  <select id="bulkMode">
+                    <option value="single-pair">当前文件夹 → 当前 Collection</option>
+                    <option value="direct-children-to-root">直接子文件夹 → 当前 Collection</option>
+                    <option value="subtree-to-root">完整子树 → 当前 Collection</option>
+                    <option value="children-by-name">全局同名自动一一匹配</option>
+                  </select>
+                </label>
+                <div class="toolbar" style="align-self: end;">
+                  <button id="generateRules">批量生成</button>
+                </div>
+              </div>
+              <p id="bulkHint" class="hint">批量生成不会删除已有规则；同源同目标的规则会自动跳过。</p>
+            </div>
+
+            <div class="rule-manager">
+              <div class="rule-list-panel">
+                <div class="rule-tools">
+                  <input id="ruleSearch" placeholder="搜索规则、Chrome 路径或 Raindrop 路径">
+                  <span id="ruleCount" class="badge warn">0 条</span>
+                </div>
+                <div id="rules" class="compact-rule-list"></div>
+              </div>
+
+              <div id="ruleDetail" class="rule-detail">
+                <div class="section-header">
+                  <div>
+                    <h3>规则详情</h3>
+                    <p id="ruleDetailHint">选择左侧规则后编辑过滤、标签和同步间隔。</p>
+                  </div>
+                </div>
+                <div class="form-grid">
+                  <label class="span-2">规则名称
+                    <input data-field="name">
+                  </label>
+                  <label>Chrome 文件夹
+                    <select data-field="sourceChromeFolderId"></select>
+                  </label>
+                  <label>Raindrop Collection
+                    <select data-field="targetRaindropCollectionId"></select>
+                  </label>
+                  <label>同步方向
+                    <select data-field="direction">
+                      <option value="chrome-to-raindrop">Chrome → Raindrop</option>
+                      <option value="raindrop-to-chrome">Raindrop → Chrome</option>
+                      <option value="bidirectional">双向同步</option>
+                    </select>
+                  </label>
+                  <label>冲突策略
+                    <select data-field="conflictPolicy">
+                      <option value="chrome-wins">Chrome 优先</option>
+                      <option value="raindrop-wins">Raindrop 优先</option>
+                      <option value="skip-conflicts">保守跳过</option>
+                    </select>
+                  </label>
+                  <p id="directionHint" class="hint span-2"></p>
+                  <label class="span-2">排除路径（一行一个）
+                    <textarea data-field="excludePaths" placeholder="工作资料 / 私人临时"></textarea>
+                  </label>
+                  <details class="advanced-filter span-2">
+                    <summary>高级过滤</summary>
+                    <div class="form-grid">
+                      <label class="span-2">域名黑名单（一行一个）
+                        <textarea data-field="domainBlocklist" placeholder="bank.example.com"></textarea>
+                      </label>
+                      <label class="span-2">域名白名单（一行一个）
+                        <textarea data-field="domainAllowlist" placeholder="docs.google.com"></textarea>
+                      </label>
+                      <label class="span-2">标题黑名单（一行一个）
+                        <textarea data-field="titleBlocklist" placeholder="private"></textarea>
+                      </label>
+                      <label class="span-2">URL 黑名单（一行一个）
+                        <textarea data-field="urlBlocklist" placeholder="/personal/"></textarea>
+                      </label>
+                    </div>
+                  </details>
+                  <label>自动标签（逗号分隔）
+                    <input data-field="tags" placeholder="chrome-backup, work">
+                  </label>
+                  <label>校验间隔（分钟）
+                    <input data-field="scheduleMinutes" type="number" min="5" step="5">
+                  </label>
+                </div>
+                <div class="rule-footer">
+                  <button id="resetRuleFromChrome" class="danger">清空目标并以 Chrome 重建</button>
+                  <label class="status-pill">
+                    <input data-field="enabled" type="checkbox" style="width:auto; min-height:auto;">
+                    <span>启用</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div>
+          <section class="section compact">
+            <div class="section-header">
+              <div>
+                <h2>隐私边界</h2>
+                <p>控制办公环境下可见、可同步、可审计的范围。</p>
+              </div>
+            </div>
+            <div class="switch-row">
+              <div>
+                <strong>Office Mode</strong>
+                <div class="hint">Popup 与日志默认脱敏，减少投屏和旁观风险。</div>
+              </div>
+              <input id="officeMode" type="checkbox">
+            </div>
+            <div class="switch-row">
+              <div>
+                <strong>暂停同步</strong>
+                <div class="hint">立即停止后台同步，适合整理书签或网络环境不确定时使用。</div>
+              </div>
+              <input id="syncPaused" type="checkbox">
+            </div>
+            <div class="switch-row">
+              <div>
+                <strong>日志脱敏</strong>
+                <div class="hint">日志不展示具体标题和 URL，只保留数量、规则和原因。</div>
+              </div>
+              <input id="redactLogs" type="checkbox">
+            </div>
+          </section>
+
+          <section class="section compact">
+            <div class="section-header">
+              <div>
+                <h2>敏感过滤</h2>
+                <p>命中后默认跳过同步，并写入脱敏日志。</p>
+              </div>
+            </div>
+            <div class="form-grid">
+              <label class="span-2">关键词（一行一个）
+                <textarea id="sensitiveKeywords"></textarea>
+              </label>
+              <label class="span-2">域名（一行一个）
+                <textarea id="sensitiveDomains"></textarea>
+              </label>
+              <label class="span-2">路径（一行一个）
+                <textarea id="sensitivePaths"></textarea>
+              </label>
+            </div>
+          </section>
+
+          <section class="section compact">
+            <div class="section-header">
+              <div>
+                <h2>同步日志</h2>
+                <p>默认只展示事件、数量和失败原因。</p>
+              </div>
+              <div class="toolbar">
+                <button id="refreshLogs">刷新</button>
+                <button id="clearLogs" class="danger">清空</button>
+              </div>
+            </div>
+            <div id="logs" class="log"></div>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <template id="ruleTemplate">
+      <div class="compact-rule-row">
+        <input data-action="toggle" type="checkbox" aria-label="启用规则">
+        <button data-action="select" class="rule-select">
+          <span class="rule-row-title"></span>
+          <span class="rule-row-path"></span>
+        </button>
+        <span class="badge">单向</span>
+        <button data-action="duplicate">复制</button>
+        <button data-action="delete" class="danger">删除</button>
+      </div>
+    </template>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
