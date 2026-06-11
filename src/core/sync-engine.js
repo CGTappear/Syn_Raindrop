@@ -42,7 +42,7 @@ export async function runSync(trigger = "manual") {
     return summary;
   }
 
-  if (settings.syncPaused) {
+  if (settings.syncPaused && !isManualSyncTrigger(trigger)) {
     await appendLog({ level: "info", event: "sync-paused", message: "Sync is paused.", trigger });
     return summary;
   }
@@ -541,9 +541,11 @@ async function pushChromeToRaindrop(api, settings, state, rule, visibleBookmarkI
     currentRuleUrls.add(normalizeUrl(bookmark.url));
     const mapping = state.bookmarkToRaindrop[bookmark.id];
     try {
-      const existingRaindrop = mapping?.raindropId
-        ? { _id: mapping.raindropId }
-        : raindropsByUrl.get(normalizeUrl(bookmark.url));
+      const urlKey = normalizeUrl(bookmark.url);
+      const mappedRaindrop = mapping?.raindropId
+        ? getCachedRaindropById(context, rule.targetRaindropCollectionId, mapping.raindropId)
+        : null;
+      const existingRaindrop = mappedRaindrop || raindropsByUrl.get(urlKey);
 
       if (existingRaindrop?._id) {
         if (shouldSkipChromePushConflict(rule)) {
@@ -567,18 +569,32 @@ async function pushChromeToRaindrop(api, settings, state, rule, visibleBookmarkI
           title: bookmark.title
         };
         upsertMapping(state, bookmark, existingRaindrop._id, rule);
-        raindropsByUrl.set(normalizeUrl(bookmark.url), updatedItem);
+        raindropsByUrl.set(urlKey, updatedItem);
         upsertRaindropCache(context, rule.targetRaindropCollectionId, updatedItem);
         summary.updated += 1;
+        await appendLog({
+          level: "info",
+          event: "bookmark-pushed-updated",
+          ruleId: rule.id,
+          ruleName: rule.name,
+          bookmark: redactBookmark(bookmark, settings.redactLogs)
+        });
       } else {
         const created = await api.createRaindrop(rule.targetRaindropCollectionId, bookmark, rule.tags);
         const raindropId = created.item?._id;
         upsertMapping(state, bookmark, raindropId, rule);
         if (created.item) {
-          raindropsByUrl.set(normalizeUrl(bookmark.url), created.item);
+          raindropsByUrl.set(urlKey, created.item);
           upsertRaindropCache(context, rule.targetRaindropCollectionId, created.item);
         }
         summary.created += 1;
+        await appendLog({
+          level: "info",
+          event: "bookmark-pushed-created",
+          ruleId: rule.id,
+          ruleName: rule.name,
+          bookmark: redactBookmark(bookmark, settings.redactLogs)
+        });
       }
       claimedChromeBookmarkIds.add(bookmark.id);
       state.knownBookmarks[bookmark.id] = {
@@ -764,6 +780,12 @@ function upsertRaindropCache(context, collectionId, item) {
   } else {
     items.unshift(item);
   }
+}
+
+function getCachedRaindropById(context, collectionId, raindropId) {
+  const key = String(collectionId);
+  const items = context.raindropItemsByCollection?.get(key) || [];
+  return items.find((item) => Number(item._id) === Number(raindropId)) || null;
 }
 
 function removeRaindropCache(context, collectionId, raindropId) {
@@ -995,6 +1017,10 @@ function isValidCollectionId(collectionId) {
 function isStaleRunningState(startedAt) {
   const started = Date.parse(startedAt || "");
   return !started || Date.now() - started > 30 * 60 * 1000;
+}
+
+function isManualSyncTrigger(trigger) {
+  return trigger === "manual" || trigger === "rule-reset-from-chrome";
 }
 
 function delay(ms) {

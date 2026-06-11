@@ -201,9 +201,6 @@
                   <label>自动标签（逗号分隔）
                     <input data-field="tags" placeholder="chrome-backup, work">
                   </label>
-                  <label>校验间隔（分钟）
-                    <input data-field="scheduleMinutes" type="number" min="5" step="5">
-                  </label>
                 </div>
                 <div class="rule-footer">
                   <button id="resetRuleFromChrome" class="danger">清空目标并以 Chrome 重建</button>
@@ -238,6 +235,25 @@
                 <div class="hint">立即停止后台同步，适合整理书签或网络环境不确定时使用。</div>
               </div>
               <input id="syncPaused" type="checkbox">
+            </div>
+            <div class="switch-row">
+              <div>
+                <strong>定时同步间隔</strong>
+                <div class="hint">一键设置后台自动同步频率；手动同步不受此间隔限制。</div>
+              </div>
+              <div class="inline-control">
+                <select id="syncIntervalMinutes">
+                  <option value="5">5 分钟</option>
+                  <option value="15">15 分钟</option>
+                  <option value="30">30 分钟</option>
+                  <option value="60">1 小时</option>
+                  <option value="180">3 小时</option>
+                  <option value="360">6 小时</option>
+                  <option value="720">12 小时</option>
+                  <option value="1440">24 小时</option>
+                </select>
+                <button id="saveSyncInterval">应用间隔</button>
+              </div>
             </div>
             <div class="switch-row">
               <div>

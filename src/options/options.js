@@ -43,6 +43,8 @@ const nodes = {
   saveRules: document.querySelector("#saveRules"),
   officeMode: document.querySelector("#officeMode"),
   syncPaused: document.querySelector("#syncPaused"),
+  syncIntervalMinutes: document.querySelector("#syncIntervalMinutes"),
+  saveSyncInterval: document.querySelector("#saveSyncInterval"),
   redactLogs: document.querySelector("#redactLogs"),
   sensitiveKeywords: document.querySelector("#sensitiveKeywords"),
   sensitiveDomains: document.querySelector("#sensitiveDomains"),
@@ -71,7 +73,8 @@ nodes.clientId.addEventListener("change", saveFromForm);
 nodes.clientSecret.addEventListener("change", saveFromForm);
 nodes.redirectPath.addEventListener("change", saveFromForm);
 nodes.officeMode.addEventListener("change", saveFromForm);
-nodes.syncPaused.addEventListener("change", saveFromForm);
+nodes.syncPaused.addEventListener("change", toggleSyncPaused);
+nodes.saveSyncInterval.addEventListener("click", applySyncInterval);
 nodes.redactLogs.addEventListener("change", saveFromForm);
 nodes.sensitiveKeywords.addEventListener("change", saveFromForm);
 nodes.sensitiveDomains.addEventListener("change", saveFromForm);
@@ -191,6 +194,7 @@ nodes.generateRules.addEventListener("click", async () => {
 nodes.saveRules.addEventListener("click", async () => {
   collectRuleDetail();
   await saveFromForm();
+  await applySyncInterval({ silent: true });
 });
 
 nodes.loadCollections.addEventListener("click", async () => {
@@ -250,6 +254,15 @@ nodes.disconnectRaindrop.addEventListener("click", async () => {
 nodes.syncNow.addEventListener("click", async () => {
   setButtonLoading(nodes.syncNow, "同步中", true);
   try {
+    await saveFromForm();
+    const intervalResponse = await chrome.runtime.sendMessage({
+      type: "SET_SYNC_INTERVAL",
+      minutes: settings.syncIntervalMinutes
+    });
+    if (!intervalResponse?.ok) {
+      throw new Error(intervalResponse?.error || "刷新同步配置失败");
+    }
+    settings = intervalResponse.result || settings;
     const response = await chrome.runtime.sendMessage({ type: "RUN_SYNC" });
     if (!response?.ok) throw new Error(response?.error || "同步失败");
     const summary = response.result || {};
@@ -281,6 +294,7 @@ function render() {
   nodes.redirectUri.value = getRedirectUri(settings);
   nodes.officeMode.checked = Boolean(settings.officeMode);
   nodes.syncPaused.checked = Boolean(settings.syncPaused);
+  nodes.syncIntervalMinutes.value = String(normalizeSyncInterval(settings.syncIntervalMinutes));
   nodes.redactLogs.checked = Boolean(settings.redactLogs);
   nodes.sensitiveKeywords.value = lines(settings.sensitiveFilters.keywords);
   nodes.sensitiveDomains.value = lines(settings.sensitiveFilters.domains);
@@ -523,7 +537,6 @@ function renderRuleDetail() {
   setInput(nodes.ruleDetail, "titleBlocklist", lines(rule.titleBlocklist));
   setInput(nodes.ruleDetail, "urlBlocklist", lines(rule.urlBlocklist));
   setInput(nodes.ruleDetail, "tags", (rule.tags || []).join(", "));
-  setInput(nodes.ruleDetail, "scheduleMinutes", rule.scheduleMinutes || 30);
 
   const folderSelect = nodes.ruleDetail.querySelector("[data-field='sourceChromeFolderId']");
   folderSelect.innerHTML = folders.map((folder) => `<option value="${escapeHtml(folder.id)}">${escapeHtml(folder.path)}</option>`).join("");
@@ -674,7 +687,6 @@ function collectRuleDetail() {
     titleBlocklist: parseLines(value(nodes.ruleDetail, "titleBlocklist")),
     urlBlocklist: parseLines(value(nodes.ruleDetail, "urlBlocklist")),
     tags: value(nodes.ruleDetail, "tags").split(",").map((tag) => tag.trim()).filter(Boolean),
-    scheduleMinutes: Number(value(nodes.ruleDetail, "scheduleMinutes") || 30),
     deletePolicy: "archive",
     updatedAt: new Date().toISOString()
   });
@@ -699,8 +711,7 @@ function generateBulkRules() {
       targetRaindropCollectionName: collection.path || collection.title,
       direction: "chrome-to-raindrop",
       conflictPolicy: "chrome-wins",
-      tags: ["chrome-backup"],
-      scheduleMinutes: 30
+      tags: ["chrome-backup"]
     });
     settings.rules = [...(settings.rules || []), rule];
     selectedRuleId = rule.id;
@@ -754,6 +765,7 @@ async function saveFromForm() {
   settings.officeMode = nodes.officeMode.checked;
   settings.syncPaused = nodes.syncPaused.checked;
   settings.redactLogs = nodes.redactLogs.checked;
+  settings.syncIntervalMinutes = normalizeSyncInterval(nodes.syncIntervalMinutes.value);
   settings.sensitiveFilters = {
     keywords: parseLines(nodes.sensitiveKeywords.value),
     domains: parseLines(nodes.sensitiveDomains.value),
@@ -763,8 +775,48 @@ async function saveFromForm() {
   render();
 }
 
+async function toggleSyncPaused() {
+  await saveFromForm();
+  const type = nodes.syncPaused.checked ? "PAUSE_SYNC" : "RESUME_SYNC";
+  const response = await chrome.runtime.sendMessage({ type });
+  if (!response?.ok) {
+    nodes.statusLine.textContent = `${nodes.syncPaused.checked ? "暂停" : "恢复"}同步失败：${response?.error || "unknown error"}`;
+    return;
+  }
+  settings = response.result || await getSettings();
+  render();
+}
+
+async function applySyncInterval(options = {}) {
+  collectRuleDetail();
+  settings.syncIntervalMinutes = normalizeSyncInterval(nodes.syncIntervalMinutes.value);
+  settings = await saveSettings(settings);
+  const response = await chrome.runtime.sendMessage({
+    type: "SET_SYNC_INTERVAL",
+    minutes: settings.syncIntervalMinutes
+  });
+  if (!response?.ok) {
+    nodes.statusLine.textContent = `设置定时同步失败：${response?.error || "unknown error"}`;
+    return;
+  }
+  settings = response.result || await getSettings();
+  render();
+  if (!options.silent) {
+    nodes.statusLine.textContent = settings.syncPaused
+      ? `已设置后台同步间隔为 ${settings.syncIntervalMinutes} 分钟；当前处于暂停状态，手动同步仍可使用。`
+      : `已设置后台同步间隔为 ${settings.syncIntervalMinutes} 分钟。`;
+  }
+}
+
 async function persistRulesOnly() {
   settings = await saveSettings(settings);
+  const response = await chrome.runtime.sendMessage({
+    type: "SET_SYNC_INTERVAL",
+    minutes: settings.syncIntervalMinutes
+  });
+  if (response?.ok && response.result) {
+    settings = response.result;
+  }
   renderStatus();
 }
 
@@ -1017,6 +1069,12 @@ function parseLines(valueText) {
 
 function lines(items) {
   return (items || []).join("\n");
+}
+
+function normalizeSyncInterval(minutes) {
+  const numeric = Number(minutes || 30);
+  if (!Number.isFinite(numeric)) return 30;
+  return Math.max(5, Math.min(Math.round(numeric), 1440));
 }
 
 function lastPathPart(path) {

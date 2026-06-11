@@ -50,7 +50,17 @@ async function handleMessage(message) {
   if (message?.type === "CONTINUE_DEDUPE_TASK") return processDedupeTask(message.taskId);
   if (message?.type === "CONNECT_RAINDROP") return connectRaindrop();
   if (message?.type === "DISCONNECT_RAINDROP") return disconnectRaindrop();
-  if (message?.type === "PAUSE_SYNC") return updateSettings({ syncPaused: true });
+  if (message?.type === "SET_SYNC_INTERVAL") {
+    const minutes = normalizeSyncInterval(message.minutes);
+    const settings = await updateSettings({ syncIntervalMinutes: minutes });
+    await ensureAlarm();
+    return settings;
+  }
+  if (message?.type === "PAUSE_SYNC") {
+    const settings = await updateSettings({ syncPaused: true });
+    await ensureAlarm();
+    return settings;
+  }
   if (message?.type === "RESUME_SYNC") {
     const settings = await updateSettings({ syncPaused: false });
     await ensureAlarm();
@@ -72,8 +82,16 @@ function queueSync(trigger) {
 
 async function ensureAlarm() {
   const settings = await getSettings();
-  const enabledRules = (settings.rules || []).filter((rule) => rule.enabled);
-  const minutes = Math.max(5, Math.min(...enabledRules.map((rule) => rule.scheduleMinutes || 30), 30));
   await chrome.alarms.clear(SYNC_ALARM);
+  if (settings.syncPaused) return;
+  const enabledRules = (settings.rules || []).filter((rule) => rule.enabled);
+  if (enabledRules.length === 0) return;
+  const minutes = normalizeSyncInterval(settings.syncIntervalMinutes);
   await chrome.alarms.create(SYNC_ALARM, { periodInMinutes: minutes });
+}
+
+function normalizeSyncInterval(minutes) {
+  const numeric = Number(minutes || 30);
+  if (!Number.isFinite(numeric)) return 30;
+  return Math.max(5, Math.min(Math.round(numeric), 1440));
 }

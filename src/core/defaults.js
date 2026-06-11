@@ -6,6 +6,7 @@ export const DEFAULT_SETTINGS = {
   locked: false,
   lockPinHash: "",
   syncPaused: false,
+  syncIntervalMinutes: 30,
   redactLogs: true,
   lastSyncAt: "",
   lastSyncSummary: {
