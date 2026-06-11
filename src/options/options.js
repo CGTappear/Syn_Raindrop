@@ -271,6 +271,8 @@ nodes.syncNow.addEventListener("click", async () => {
     renderLogs();
     if (summary.alreadyRunning) {
       nodes.statusLine.textContent = "已有同步任务正在运行，本次点击已跳过。请稍后刷新日志或等待当前任务完成。";
+    } else {
+      nodes.statusLine.textContent = formatSyncSummary(summary);
     }
   } catch (error) {
     nodes.statusLine.textContent = `同步失败：${error.message}`;
@@ -1071,10 +1073,19 @@ function lines(items) {
   return (items || []).join("\n");
 }
 
+function formatSyncSummary(summary = {}) {
+  const pushRules = (summary.rules || []).filter((rule) => rule.mode === "push");
+  const pushedChromeBookmarks = pushRules.reduce((total, rule) => total + Number(rule.chromeBookmarks || 0), 0);
+  const duplicateChromeUrls = pushRules.reduce((total, rule) => total + Number(rule.duplicateChromeUrls || 0), 0);
+  const prefix = summary.forceUnlocked ? "已接管旧同步锁并完成" : "同步完成";
+  const duplicateText = duplicateChromeUrls ? `，同 URL 重复 ${duplicateChromeUrls} 个已按独立书签处理` : "";
+  return `${prefix}：推送读取 ${pushedChromeBookmarks} 个${duplicateText}，新增 ${summary.created || 0}，更新 ${summary.updated || 0}，拉取 ${summary.pulled || 0}，跳过 ${summary.skipped || 0}，失败 ${summary.failed || 0}`;
+}
+
 function normalizeSyncInterval(minutes) {
   const numeric = Number(minutes || 30);
   if (!Number.isFinite(numeric)) return 30;
-  return Math.max(5, Math.min(Math.round(numeric), 1440));
+  return Math.max(1, Math.min(Math.round(numeric), 1440));
 }
 
 function lastPathPart(path) {

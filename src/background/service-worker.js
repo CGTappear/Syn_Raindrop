@@ -22,7 +22,7 @@ chrome.runtime.onStartup.addListener(async () => {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === SYNC_ALARM) {
-    runSync("alarm").catch((error) => {
+    runBackgroundSync("alarm").catch((error) => {
       console.error("Scheduled sync failed", error);
     });
   }
@@ -41,7 +41,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 async function handleMessage(message) {
-  if (message?.type === "RUN_SYNC") return runSync("manual");
+  if (message?.type === "RUN_SYNC") return runManualSync();
   if (message?.type === "RESET_RULE_FROM_CHROME") return resetRuleFromChrome(message.ruleId);
   if (message?.type === "GET_RESET_TASK") return getRuleResetTask();
   if (message?.type === "CONTINUE_RESET_TASK") return processResetTask(message.taskId);
@@ -70,14 +70,65 @@ async function handleMessage(message) {
 }
 
 let syncTimer = null;
+let activeSyncPromise = null;
+let manualSyncPromise = null;
 
 function queueSync(trigger) {
   if (syncTimer) clearTimeout(syncTimer);
   syncTimer = setTimeout(() => {
-    runSync(trigger).catch((error) => {
+    syncTimer = null;
+    runBackgroundSync(trigger).catch((error) => {
       console.error("Bookmark-triggered sync failed", error);
     });
   }, 2000);
+}
+
+async function runManualSync() {
+  if (manualSyncPromise) return manualSyncPromise;
+  manualSyncPromise = runManualSyncNow();
+  try {
+    return await manualSyncPromise;
+  } finally {
+    manualSyncPromise = null;
+  }
+}
+
+async function runManualSyncNow() {
+  if (syncTimer) {
+    clearTimeout(syncTimer);
+    syncTimer = null;
+  }
+  if (activeSyncPromise) {
+    await activeSyncPromise.catch(() => null);
+  }
+  return runTrackedSync("manual", { forceUnlock: true });
+}
+
+async function runBackgroundSync(trigger) {
+  if (activeSyncPromise) {
+    return {
+      created: 0,
+      updated: 0,
+      archived: 0,
+      pulled: 0,
+      skipped: 1,
+      failed: 0,
+      alreadyRunning: true
+    };
+  }
+  return runTrackedSync(trigger);
+}
+
+async function runTrackedSync(trigger, options = {}) {
+  const promise = runSync(trigger, options);
+  activeSyncPromise = promise;
+  try {
+    return await promise;
+  } finally {
+    if (activeSyncPromise === promise) {
+      activeSyncPromise = null;
+    }
+  }
 }
 
 async function ensureAlarm() {
@@ -93,5 +144,5 @@ async function ensureAlarm() {
 function normalizeSyncInterval(minutes) {
   const numeric = Number(minutes || 30);
   if (!Number.isFinite(numeric)) return 30;
-  return Math.max(5, Math.min(Math.round(numeric), 1440));
+  return Math.max(1, Math.min(Math.round(numeric), 1440));
 }

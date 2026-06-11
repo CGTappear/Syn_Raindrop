@@ -15,7 +15,7 @@ import {
 import { RaindropApi } from "./raindrop-api.js";
 import { ensureAccessToken } from "./raindrop-auth.js";
 
-export async function runSync(trigger = "manual") {
+export async function runSync(trigger = "manual", options = {}) {
   const settings = await getSettings();
   const state = await getSyncState();
   const summary = {
@@ -24,22 +24,38 @@ export async function runSync(trigger = "manual") {
     archived: 0,
     pulled: 0,
     skipped: 0,
-    failed: 0
+    failed: 0,
+    rules: []
   };
 
   if (state.running && !isStaleRunningState(state.runningStartedAt)) {
-    summary.skipped += 1;
-    summary.alreadyRunning = true;
-    await appendLog({
-      level: "warn",
-      event: "sync-already-running",
-      message: "已有同步任务正在运行，本次请求已跳过。",
-      trigger,
-      summary: {
-        runningStartedAt: state.runningStartedAt || ""
-      }
-    });
-    return summary;
+    if (options.forceUnlock && isManualSyncTrigger(trigger)) {
+      summary.forceUnlocked = true;
+      await appendLog({
+        level: "warn",
+        event: "sync-lock-overridden",
+        message: "手动同步已接管上一次未释放的运行锁。",
+        trigger,
+        summary: {
+          runningStartedAt: state.runningStartedAt || "",
+          runningTrigger: state.runningTrigger || ""
+        }
+      });
+    } else {
+      summary.skipped += 1;
+      summary.alreadyRunning = true;
+      await appendLog({
+        level: "warn",
+        event: "sync-already-running",
+        message: "已有同步任务正在运行，本次请求已跳过。",
+        trigger,
+        summary: {
+          runningStartedAt: state.runningStartedAt || "",
+          runningTrigger: state.runningTrigger || ""
+        }
+      });
+      return summary;
+    }
   }
 
   if (settings.syncPaused && !isManualSyncTrigger(trigger)) {
@@ -65,6 +81,7 @@ export async function runSync(trigger = "manual") {
   state.running = true;
   state.lastRunId = runId;
   state.runningStartedAt = new Date().toISOString();
+  state.runningTrigger = trigger;
   await saveSyncState(state);
 
   const visibleBookmarkIds = new Set();
@@ -94,6 +111,7 @@ export async function runSync(trigger = "manual") {
   } finally {
     state.running = false;
     state.runningStartedAt = "";
+    state.runningTrigger = "";
     await saveSyncState(state);
   }
 
@@ -505,14 +523,70 @@ async function verifyDedupeArchives(api, task) {
 }
 
 async function pushChromeToRaindrop(api, settings, state, rule, visibleBookmarkIds, claimedChromeBookmarkIds, summary, context) {
+  const ruleSummary = createRuleSummary(rule, "push");
+  summary.rules.push(ruleSummary);
+
+  if (!isValidCollectionId(rule.targetRaindropCollectionId)) {
+    summary.failed += 1;
+    ruleSummary.failed += 1;
+    await appendLog({
+      level: "error",
+      event: "push-rule-invalid-target",
+      ruleId: rule.id,
+      ruleName: rule.name,
+      message: "Raindrop target collection is not configured."
+    });
+    return;
+  }
+
   const bookmarks = await listBookmarksForRule(rule);
-  const raindropsByUrl = await getRaindropsByUrl(api, rule.targetRaindropCollectionId, context);
+  ruleSummary.chromeBookmarks = bookmarks.length;
+  Object.assign(ruleSummary, summarizeBookmarkUrls(bookmarks));
+  await appendLog({
+    level: "info",
+    event: "push-rule-start",
+    ruleId: rule.id,
+    ruleName: rule.name,
+    message: `开始推送规则：读取到 ${bookmarks.length} 个 Chrome 书签。`,
+    summary: ruleSummary
+  });
+
+  if (bookmarks.length === 0) {
+    await appendLog({
+      level: "warn",
+      event: "push-rule-empty",
+      ruleId: rule.id,
+      ruleName: rule.name,
+      message: "推送规则没有读取到 Chrome 书签，请检查 Chrome 文件夹是否选对。"
+    });
+    return;
+  }
+
+  let raindropsByUrl;
+  try {
+    raindropsByUrl = await getRaindropsByUrlGroups(api, rule.targetRaindropCollectionId, context);
+    ruleSummary.raindrops = countRaindropUrlGroupItems(raindropsByUrl);
+  } catch (error) {
+    summary.failed += bookmarks.length;
+    ruleSummary.failed += bookmarks.length;
+    await appendLog({
+      level: "error",
+      event: "push-rule-list-raindrops-failed",
+      ruleId: rule.id,
+      ruleName: rule.name,
+      message: error.message
+    });
+    return;
+  }
+
   const currentRuleUrls = new Set();
+  const claimedRaindropIds = new Set();
   for (const bookmark of bookmarks) {
     visibleBookmarkIds.add(bookmark.id);
 
     if (claimedChromeBookmarkIds.has(bookmark.id)) {
       summary.skipped += 1;
+      ruleSummary.skipped += 1;
       await appendLog({
         level: "info",
         event: "bookmark-skipped",
@@ -527,6 +601,7 @@ async function pushChromeToRaindrop(api, settings, state, rule, visibleBookmarkI
     const decision = findRuleForBookmark(bookmark, { ...settings, rules: [rule] });
     if (decision.action !== "sync") {
       summary.skipped += 1;
+      ruleSummary.skipped += 1;
       await appendLog({
         level: "info",
         event: "bookmark-skipped",
@@ -545,11 +620,15 @@ async function pushChromeToRaindrop(api, settings, state, rule, visibleBookmarkI
       const mappedRaindrop = mapping?.raindropId
         ? getCachedRaindropById(context, rule.targetRaindropCollectionId, mapping.raindropId)
         : null;
-      const existingRaindrop = mappedRaindrop || raindropsByUrl.get(urlKey);
+      const usableMappedRaindrop = mappedRaindrop && !claimedRaindropIds.has(String(mappedRaindrop._id))
+        ? mappedRaindrop
+        : null;
+      const existingRaindrop = usableMappedRaindrop || getUnclaimedRaindropByUrl(raindropsByUrl, urlKey, claimedRaindropIds, state, bookmark, rule);
 
       if (existingRaindrop?._id) {
         if (shouldSkipChromePushConflict(rule)) {
           summary.skipped += 1;
+          ruleSummary.skipped += 1;
           claimedChromeBookmarkIds.add(bookmark.id);
           await appendLog({
             level: "info",
@@ -562,6 +641,7 @@ async function pushChromeToRaindrop(api, settings, state, rule, visibleBookmarkI
           continue;
         }
         const updated = await api.updateRaindrop(existingRaindrop._id, rule.targetRaindropCollectionId, bookmark, rule.tags);
+        claimedRaindropIds.add(String(existingRaindrop._id));
         const updatedItem = updated.item || {
           ...existingRaindrop,
           _id: existingRaindrop._id,
@@ -569,9 +649,10 @@ async function pushChromeToRaindrop(api, settings, state, rule, visibleBookmarkI
           title: bookmark.title
         };
         upsertMapping(state, bookmark, existingRaindrop._id, rule);
-        raindropsByUrl.set(urlKey, updatedItem);
+        upsertRaindropUrlGroup(raindropsByUrl, urlKey, updatedItem);
         upsertRaindropCache(context, rule.targetRaindropCollectionId, updatedItem);
         summary.updated += 1;
+        ruleSummary.updated += 1;
         await appendLog({
           level: "info",
           event: "bookmark-pushed-updated",
@@ -583,11 +664,13 @@ async function pushChromeToRaindrop(api, settings, state, rule, visibleBookmarkI
         const created = await api.createRaindrop(rule.targetRaindropCollectionId, bookmark, rule.tags);
         const raindropId = created.item?._id;
         upsertMapping(state, bookmark, raindropId, rule);
+        if (raindropId) claimedRaindropIds.add(String(raindropId));
         if (created.item) {
-          raindropsByUrl.set(urlKey, created.item);
+          upsertRaindropUrlGroup(raindropsByUrl, urlKey, created.item);
           upsertRaindropCache(context, rule.targetRaindropCollectionId, created.item);
         }
         summary.created += 1;
+        ruleSummary.created += 1;
         await appendLog({
           level: "info",
           event: "bookmark-pushed-created",
@@ -606,6 +689,7 @@ async function pushChromeToRaindrop(api, settings, state, rule, visibleBookmarkI
       };
     } catch (error) {
       summary.failed += 1;
+      ruleSummary.failed += 1;
       await appendLog({
         level: "error",
         event: "bookmark-sync-failed",
@@ -618,6 +702,14 @@ async function pushChromeToRaindrop(api, settings, state, rule, visibleBookmarkI
   }
 
   await reconcileRaindropExtras(api, settings, state, rule, raindropsByUrl, currentRuleUrls, summary, context);
+  await appendLog({
+    level: "info",
+    event: "push-rule-completed",
+    ruleId: rule.id,
+    ruleName: rule.name,
+    message: `推送规则完成：新增 ${ruleSummary.created}，更新 ${ruleSummary.updated}，跳过 ${ruleSummary.skipped}，失败 ${ruleSummary.failed}。`,
+    summary: ruleSummary
+  });
 }
 
 async function pullRaindropToChrome(api, settings, state, rule, summary, context, visibleBookmarkIds = null) {
@@ -803,7 +895,7 @@ async function reconcileRaindropExtras(api, settings, state, rule, raindropsByUr
   if (rule.direction !== "chrome-to-raindrop") return;
   if ((rule.deletePolicy || "archive") !== "archive") return;
 
-  for (const item of raindropsByUrl.values()) {
+  for (const item of flattenRaindropsByUrl(raindropsByUrl)) {
     const itemUrl = normalizeUrl(item.link);
     if (!itemUrl || currentRuleUrls.has(itemUrl)) continue;
     if (!isManagedRaindropItem(item, rule, state)) continue;
@@ -852,14 +944,53 @@ function removeRaindropMapping(state, raindropId) {
   if (state.raindropToBookmark) delete state.raindropToBookmark[raindropId];
 }
 
-async function getRaindropsByUrl(api, collectionId, context) {
+async function getRaindropsByUrlGroups(api, collectionId, context) {
   const items = await getRaindropsForCollection(api, collectionId, context);
   const byUrl = new Map();
   for (const item of items) {
     const key = normalizeUrl(item.link);
-    if (key && !byUrl.has(key)) byUrl.set(key, item);
+    if (!key) continue;
+    if (!byUrl.has(key)) byUrl.set(key, []);
+    byUrl.get(key).push(item);
   }
   return byUrl;
+}
+
+function getUnclaimedRaindropByUrl(raindropsByUrl, urlKey, claimedRaindropIds, state, bookmark, rule) {
+  const candidates = raindropsByUrl.get(urlKey) || [];
+  for (const item of candidates) {
+    const itemId = String(item._id || "");
+    if (!itemId || claimedRaindropIds.has(itemId)) continue;
+    const mapping = state.raindropToBookmark?.[itemId];
+    if (mapping?.ruleId === rule.id && String(mapping.bookmarkId) !== String(bookmark.id)) continue;
+    return item;
+  }
+  return null;
+}
+
+function upsertRaindropUrlGroup(raindropsByUrl, urlKey, item) {
+  if (!urlKey || !item?._id) return;
+  if (!raindropsByUrl.has(urlKey)) {
+    raindropsByUrl.set(urlKey, [item]);
+    return;
+  }
+  const items = raindropsByUrl.get(urlKey);
+  const index = items.findIndex((existing) => Number(existing._id) === Number(item._id));
+  if (index >= 0) items[index] = { ...items[index], ...item };
+  else items.unshift(item);
+}
+
+function flattenRaindropsByUrl(raindropsByUrl) {
+  const items = [];
+  for (const value of raindropsByUrl.values()) {
+    if (Array.isArray(value)) items.push(...value);
+    else if (value) items.push(value);
+  }
+  return items;
+}
+
+function countRaindropUrlGroupItems(raindropsByUrl) {
+  return flattenRaindropsByUrl(raindropsByUrl).length;
 }
 
 async function getChromeBookmarksByUrl(rule, context) {
@@ -988,7 +1119,44 @@ function buildDedupePlan(items) {
 }
 
 function shouldSkipChromePushConflict(rule) {
-  return rule.conflictPolicy === "raindrop-wins" || rule.conflictPolicy === "skip-conflicts";
+  return rule.conflictPolicy === "skip-conflicts";
+}
+
+function createRuleSummary(rule, mode) {
+  return {
+    ruleId: rule.id,
+    ruleName: rule.name,
+    mode,
+    direction: rule.direction,
+    conflictPolicy: rule.conflictPolicy,
+    chromeBookmarks: 0,
+    uniqueChromeUrls: 0,
+    duplicateChromeUrls: 0,
+    raindrops: 0,
+    created: 0,
+    updated: 0,
+    archived: 0,
+    pulled: 0,
+    skipped: 0,
+    failed: 0
+  };
+}
+
+function summarizeBookmarkUrls(bookmarks) {
+  const counts = new Map();
+  for (const bookmark of bookmarks || []) {
+    const key = normalizeUrl(bookmark.url);
+    if (!key) continue;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  let duplicateChromeUrls = 0;
+  for (const count of counts.values()) {
+    if (count > 1) duplicateChromeUrls += count - 1;
+  }
+  return {
+    uniqueChromeUrls: counts.size,
+    duplicateChromeUrls
+  };
 }
 
 function compareRaindropsByFreshness(a, b) {

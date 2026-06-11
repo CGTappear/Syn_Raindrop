@@ -241,17 +241,9 @@
                 <strong>定时同步间隔</strong>
                 <div class="hint">一键设置后台自动同步频率；手动同步不受此间隔限制。</div>
               </div>
-              <div class="inline-control">
-                <select id="syncIntervalMinutes">
-                  <option value="5">5 分钟</option>
-                  <option value="15">15 分钟</option>
-                  <option value="30">30 分钟</option>
-                  <option value="60">1 小时</option>
-                  <option value="180">3 小时</option>
-                  <option value="360">6 小时</option>
-                  <option value="720">12 小时</option>
-                  <option value="1440">24 小时</option>
-                </select>
+              <div class="inline-control sync-interval-control">
+                <input id="syncIntervalMinutes" type="number" min="1" max="1440" step="1" inputmode="numeric" placeholder="30">
+                <span class="unit-label">分钟</span>
                 <button id="saveSyncInterval">应用间隔</button>
               </div>
             </div>
